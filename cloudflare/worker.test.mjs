@@ -133,3 +133,47 @@ test('D1 retains photo and message IDs; failed deletion does not block navigatio
     assert.equal((await worker.fetch(request(retry), env)).status, 200);
   } finally {globalThis.fetch = originalFetch; DB.sqlite.close();}
 });
+test('client answers are removed only after the saved order reaches the administrator', async () => {
+  const DB = dbAdapter();
+  const env = {...environment, DB, BOT_TOKEN: 'test', WEBHOOK_SECRET: 'test-secret'};
+  const originalFetch = globalThis.fetch;
+  const deleted = [];
+  let adminUnavailable = true;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (url.endsWith('/sendMessage') && body.chat_id === environment.ADMIN_ID && adminUnavailable) {
+      return Response.json({ok: false, error_code: 500});
+    }
+    if (url.endsWith('/deleteMessage')) deleted.push(body.message_id);
+    return Response.json({ok:true, result:{message_id:900}});
+  };
+  const request = update => new Request('https://bot.example/telegram', {method:'POST', headers:{'X-Telegram-Bot-Api-Secret-Token':'test-secret'}, body:JSON.stringify(update)});
+  try {
+    assert.equal((await worker.fetch(request({...callback('order:start:website:vip'), update_id:40}),env)).status,200);
+    for (let i=0;i<3;i++) {
+      const update = message(`Answer ${i}`);
+      update.update_id=41+i;
+      update.message.message_id=301+i;
+      assert.equal((await worker.fetch(request(update),env)).status,200);
+    }
+    const preview=JSON.parse(DB.sqlite.prepare('SELECT data FROM sessions WHERE chat_id=123').get().data);
+    assert.deepEqual(preview.answer_message_ids,[301,302,303]);
+    assert.ok(!deleted.some(id=>[301,302,303].includes(id)));
+    const restarted=planUpdate(callback('preview:restart'),preview,environment);
+    assert.deepEqual(restarted.effects.filter(e=>e.method==='deleteMessage' && [301,302,303].includes(e.body.message_id)).map(e=>e.body.message_id),[301,302,303]);
+    assert.deepEqual(restarted.session.answer_message_ids,[]);
+    const confirm={...callback('preview:confirm'),update_id:44};
+    assert.equal((await worker.fetch(request(confirm),env)).status,503);
+    assert.equal(DB.sqlite.prepare('SELECT count(*) n FROM orders').get().n,1);
+    assert.ok(!deleted.some(id=>[301,302,303].includes(id)));
+    adminUnavailable=false;
+    assert.equal((await worker.fetch(request(confirm),env)).status,200);
+    assert.deepEqual(deleted.filter(id=>[301,302,303].includes(id)),[301,302,303]);
+    const saved=JSON.parse(DB.sqlite.prepare('SELECT answers FROM orders').get().answers);
+    assert.equal(saved.site_name,'Answer 0');
+    assert.equal(saved.site_topic,'Answer 1');
+    assert.equal(saved.site_description,'Answer 2');
+    assert.equal((await worker.fetch(request(confirm),env)).status,200);
+    assert.deepEqual(deleted.filter(id=>[301,302,303].includes(id)),[301,302,303]);
+  } finally {globalThis.fetch=originalFetch; DB.sqlite.close();}
+});

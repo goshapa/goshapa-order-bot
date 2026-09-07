@@ -37,6 +37,11 @@ export function planUpdate(update, previous, env) {
   if (callback?.message?.message_id) oldMessages.add(callback.message.message_id);
   for (const message_id of oldMessages) effects.push({method: 'deleteMessage', body: {chat_id: chatId, message_id}});
   const send = (text, reply_markup) => effects.push({method: 'sendMessage', trackUi: true, body: {chat_id: chatId, text, parse_mode: 'HTML', ...(reply_markup ? {reply_markup} : {})}});
+  const deleteAnswers = () => {
+    for (const message_id of new Set(session.answer_message_ids || [])) {
+      effects.push({method: 'deleteMessage', body: {chat_id: chatId, message_id}});
+    }
+  };
   const reset = (prefix = '') => { session = initial(); send(prefix + welcome, mainMenu()); };
   const showPreview = () => {
     send(`<b>Проверьте вашу заявку:</b>\nУслуга: ${SERVICE_LABELS[session.service]}\nПакет: ${BUNDLE_LABELS[session.bundle]}\n\n${answerMessages(session.service, session.answers).join('\n\n')}\n\nВсё верно? Нажмите «Готово», чтобы отправить заявку.`, previewMenu());
@@ -63,9 +68,10 @@ export function planUpdate(update, previous, env) {
     } else if (data.startsWith('order:start:')) {
       const [, , service, bundle] = data.split(':');
       if (!validBundle(service, bundle)) reset();
-      else { session = {stage: 'survey', service, bundle, answers: {}, index: 0}; send(question(service, 0), cancelMenu()); }
+      else { session = {stage: 'survey', service, bundle, answers: {}, answer_message_ids: [], index: 0}; send(question(service, 0), cancelMenu()); }
     } else if (data === 'preview:restart' && session.stage === 'preview') {
-      session = {...session, stage: 'survey', answers: {}, index: 0}; send(question(session.service, 0), cancelMenu());
+      deleteAnswers();
+      session = {...session, stage: 'survey', answers: {}, answer_message_ids: [], index: 0}; send(question(session.service, 0), cancelMenu());
     } else if (data === 'preview:confirm' && session.stage === 'preview') {
       const number = `GS-C${update.update_id}`;
       const now = new Date().toISOString();
@@ -73,6 +79,9 @@ export function planUpdate(update, previous, env) {
       const contact = kb([[{text: '💬 Написать клиенту', url: user.username ? `https://t.me/${user.username}` : `tg://user?id=${user.id}`}]]);
       const header = `🆕 <b>Новая заявка ${number}</b>\n\n👤 Клиент: ${escapeHtml(order.full_name)}\nUsername: ${user.username ? '@' + escapeHtml(user.username) : '—'}\nTelegram ID: <code>${user.id}</code>\nУслуга: ${SERVICE_LABELS[session.service]}\nПакет: ${BUNDLE_LABELS[session.bundle]}\nДата (UTC): ${now}\nСтатус: New`;
       effects.push({method: 'sendMessage', body: {chat_id: env.ADMIN_ID, text: `${header}\n\n${answerMessages(session.service, session.answers).join('\n\n')}`, parse_mode: 'HTML', reply_markup: contact}});
+      // The order is committed before delivery starts; clean up answers only
+      // after the administrator notification has been delivered successfully.
+      deleteAnswers();
       send(`✅ Заявка успешно отправлена! Программист Goshapa свяжется с вами в скором времени, чтобы обсудить дальнейшие детали проекта.\n\nНомер вашей заявки: <b>${number}</b>`, mainMenu());
       session = initial();
     } else send('Эта кнопка уже неактуальна. Начните с /start.', mainMenu());
@@ -84,6 +93,9 @@ export function planUpdate(update, previous, env) {
       else if (text.length > 500) send('Пожалуйста, сократите ответ до 500 символов.\n\n' + question(session.service, session.index), cancelMenu());
       else {
         session.answers[SURVEY_QUESTIONS[session.service][session.index].key] = text;
+        if (Number.isSafeInteger(message.message_id)) {
+          session.answer_message_ids = [...new Set([...(session.answer_message_ids || []), message.message_id])];
+        }
         session.index++;
         if (session.index < SURVEY_QUESTIONS[session.service].length) send(question(session.service, session.index), cancelMenu());
         else { session.stage = 'preview'; showPreview(); }
