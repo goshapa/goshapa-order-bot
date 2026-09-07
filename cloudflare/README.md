@@ -19,7 +19,15 @@ node --test cloudflare/worker.test.mjs
 4. Проверьте `/health`: ожидается `{"ok":true}`.
 5. Остановите локальный polling и установите Telegram webhook на `https://<worker>.workers.dev/telegram`, передав `secret_token`, `max_connections=1` и `allowed_updates=["message","callback_query"]`. Не удаляйте ожидающие обновления.
 
-Не запускайте `bot.py` одновременно с облачной версией: он удаляет webhook при старте.
+`bot.py` отказывается запускать локальный polling, пока настроен webhook. Это защищает облачную версию от случайного отключения. Для осознанного возврата к локальному запуску сначала удалите webhook через Telegram Bot API.
+
+## Текущее размещение
+
+- Worker: `goshapa-order-bot.alexgulom2009.workers.dev`.
+- Бот: https://t.me/goshapaorderbot.
+- База: `goshapa-orders`, привязка `DB`.
+- Проверка доступности: `https://goshapa-order-bot.alexgulom2009.workers.dev/health`.
+- Развёртывание выполнено через Dashboard. Изменения на GitHub сами по себе не обновляют работающий Worker: после сборки нужно отдельно развернуть новый `worker.mjs`.
 
 ## Поведение и ограничения
 

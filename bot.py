@@ -28,6 +28,13 @@ async def main() -> None:
     await init_db()
 
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    webhook = await bot.get_webhook_info()
+    if webhook.url:
+        await bot.session.close()
+        raise RuntimeError(
+            "Для бота настроен облачный webhook. Локальный запуск остановлен, "
+            "чтобы не отключать облачную версию."
+        )
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.include_router(start.router)
