@@ -25,12 +25,15 @@ export function planUpdate(update, previous, env) {
   let session = structuredClone(previous || initial());
   const effects = [];
   let order = null;
-  const send = (text, reply_markup) => effects.push({method: 'sendMessage', body: {chat_id: chatId, text, parse_mode: 'HTML', ...(reply_markup ? {reply_markup} : {})}});
+  // Keep the current bot screen in D1 so navigation can remove it after a restart.
+  if (callback) effects.push({method: 'answerCallbackQuery', body: {callback_query_id: callback.id}});
+  const oldMessages = new Set(previous?.ui_message_ids || []);
+  if (callback?.message?.message_id) oldMessages.add(callback.message.message_id);
+  for (const message_id of oldMessages) effects.push({method: 'deleteMessage', body: {chat_id: chatId, message_id}});
+  const send = (text, reply_markup) => effects.push({method: 'sendMessage', trackUi: true, body: {chat_id: chatId, text, parse_mode: 'HTML', ...(reply_markup ? {reply_markup} : {})}});
   const reset = (prefix = '') => { session = initial(); send(prefix + welcome, mainMenu()); };
   const showPreview = () => {
-    send(`<b>Проверьте вашу заявку:</b>\nУслуга: ${SERVICE_LABELS[session.service]}\nПакет: ${BUNDLE_LABELS[session.bundle]}`);
-    for (const text of answerMessages(session.service, session.answers)) send(text);
-    send('Всё верно? Нажмите «Готово», чтобы отправить заявку.', previewMenu());
+    send(`<b>Проверьте вашу заявку:</b>\nУслуга: ${SERVICE_LABELS[session.service]}\nПакет: ${BUNDLE_LABELS[session.bundle]}\n\n${answerMessages(session.service, session.answers).join('\n\n')}\n\nВсё верно? Нажмите «Готово», чтобы отправить заявку.`, previewMenu());
   };
   const packages = service => {
     session = {stage: 'package', service};
@@ -38,7 +41,6 @@ export function planUpdate(update, previous, env) {
     send(`${SERVICE_LABELS[service]}\n\nВыберите пакет:`, kb([buttons.slice(0, 2), buttons.slice(2), [button('⬅️ Назад', 'back:main_menu')]]));
   };
   if (callback) {
-    effects.push({method: 'answerCallbackQuery', body: {callback_query_id: callback.id}});
     const data = callback.data || '';
     if (['back:main_menu', 'preview:cancel', 'survey:cancel'].includes(data)) reset(data.includes('cancel') ? '🗑 Черновик заявки удалён.\n\n' : '');
     else if (data.startsWith('service:') && validService(data.split(':')[1])) packages(data.split(':')[1]);
@@ -49,7 +51,7 @@ export function planUpdate(update, previous, env) {
       else {
         session = {stage: 'view', service, bundle};
         const p = PACKAGES[service][bundle];
-        effects.push({method: 'sendPhoto', body: {chat_id: chatId, photo: `https://raw.githubusercontent.com/goshapa/goshapa-order-bot/main/images/${bundle}.jpg`, caption: `<b>${p.title}</b>\n<i>${p.subtitle}</i>`, parse_mode: 'HTML'}});
+        effects.push({method: 'sendPhoto', trackUi: true, body: {chat_id: chatId, photo: `https://raw.githubusercontent.com/goshapa/goshapa-order-bot/main/images/${bundle}.jpg`, caption: `<b>${p.title}</b>\n<i>${p.subtitle}</i>`, parse_mode: 'HTML'}});
         send(`<b>Что входит в пакет:</b>\n${p.features.map(f => '• ' + f).join('\n')}\n\n<b>Что получает клиент:</b> ${p.gets}`, kb([[button('✅ Заказать', `order:start:${service}:${bundle}`)], [button('⬅️ Назад', `back:packages:${service}`)]]));
       }
     } else if (data.startsWith('order:start:')) {
@@ -64,8 +66,7 @@ export function planUpdate(update, previous, env) {
       order = {order_number: number, telegram_id: user.id, username: user.username || null, full_name: [user.first_name, user.last_name].filter(Boolean).join(' '), service: session.service, bundle: session.bundle, answers: JSON.stringify(session.answers), created_at: now, updated_at: now, source_update: update.update_id};
       const contact = kb([[{text: '💬 Написать клиенту', url: user.username ? `https://t.me/${user.username}` : `tg://user?id=${user.id}`}]]);
       const header = `🆕 <b>Новая заявка ${number}</b>\n\n👤 Клиент: ${escapeHtml(order.full_name)}\nUsername: ${user.username ? '@' + escapeHtml(user.username) : '—'}\nTelegram ID: <code>${user.id}</code>\nУслуга: ${SERVICE_LABELS[session.service]}\nПакет: ${BUNDLE_LABELS[session.bundle]}\nДата (UTC): ${now}\nСтатус: New`;
-      effects.push({method: 'sendMessage', body: {chat_id: env.ADMIN_ID, text: header, parse_mode: 'HTML', reply_markup: contact}});
-      for (const text of answerMessages(session.service, session.answers)) effects.push({method: 'sendMessage', body: {chat_id: env.ADMIN_ID, text: `<b>Заявка ${number}</b>\n${text}`, parse_mode: 'HTML'}});
+      effects.push({method: 'sendMessage', body: {chat_id: env.ADMIN_ID, text: `${header}\n\n${answerMessages(session.service, session.answers).join('\n\n')}`, parse_mode: 'HTML', reply_markup: contact}});
       send(`✅ Заявка успешно отправлена! Программист Goshapa свяжется с вами в скором времени, чтобы обсудить дальнейшие детали проекта.\n\nНомер вашей заявки: <b>${number}</b>`, mainMenu());
       session = initial();
     } else send('Эта кнопка уже неактуальна. Начните с /start.', mainMenu());
@@ -73,17 +74,19 @@ export function planUpdate(update, previous, env) {
     const text = message.text?.trim();
     if (/^\/(start|cancel)(@\w+)?(?:\s|$)/.test(text || '')) reset(text.startsWith('/cancel') ? '❌ Текущее действие отменено.\n\n' : '');
     else if (session.stage === 'survey') {
-      if (!text) send('Пожалуйста, ответьте текстовым сообщением.', cancelMenu());
-      else if (text.length > 500) send('Пожалуйста, сократите ответ до 500 символов.', cancelMenu());
+      if (!text) send('Пожалуйста, ответьте текстовым сообщением.\n\n' + question(session.service, session.index), cancelMenu());
+      else if (text.length > 500) send('Пожалуйста, сократите ответ до 500 символов.\n\n' + question(session.service, session.index), cancelMenu());
       else {
         session.answers[SURVEY_QUESTIONS[session.service][session.index].key] = text;
         session.index++;
         if (session.index < SURVEY_QUESTIONS[session.service].length) send(question(session.service, session.index), cancelMenu());
         else { session.stage = 'preview'; showPreview(); }
       }
-    } else if (session.stage === 'preview') send('Подтвердите заявку или заполните её заново.', previewMenu());
+    } else if (session.stage === 'preview') showPreview();
     else reset();
   }
+  session.ui_message_ids = [];
+  session.ui_update_id = update.update_id;
   return {chatId, session, effects, order};
 }
 
@@ -93,12 +96,17 @@ async function deliver(row, env) {
     const effect = effects[i];
     const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${effect.method}`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(effect.body), signal: AbortSignal.timeout(15000)});
     const result = await response.json();
-    if (!result.ok && effect.method !== 'answerCallbackQuery') {
+    const harmlessDelete = effect.method === 'deleteMessage' && [400, 403].includes(result.error_code);
+    if (!result.ok && effect.method !== 'answerCallbackQuery' && !harmlessDelete) {
       // Never log Telegram request URLs (they contain the token) or client answers.
       console.error('Telegram delivery failed', effect.method, result.error_code);
       throw new Error('Telegram delivery failed');
     }
-    await env.DB.prepare('UPDATE deliveries SET cursor = ? WHERE update_id = ?').bind(i + 1, row.update_id).run();
+    const saved = [env.DB.prepare('UPDATE deliveries SET cursor = ? WHERE update_id = ?').bind(i + 1, row.update_id)];
+    if (effect.trackUi && result.ok && Number.isSafeInteger(result.result?.message_id)) {
+      saved.push(env.DB.prepare("UPDATE sessions SET data = json_insert(data, '$.ui_message_ids[#]', ?) WHERE chat_id = ? AND json_extract(data, '$.ui_update_id') = ?").bind(result.result.message_id, effect.body.chat_id, row.update_id));
+    }
+    await env.DB.batch(saved);
   }
 }
 
