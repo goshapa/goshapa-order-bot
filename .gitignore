@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+goshapa.db
+venv/
+.venv/
+*.db
+*.db-*
+*.log
+bot_log.txt*
+.env.*
+!.env.example
+/ChatGPT Image *.png
+/*.docx
