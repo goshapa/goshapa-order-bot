@@ -2,6 +2,10 @@
 
 Telegram-бот для приёма заявок на разработку сайтов и Telegram-ботов.
 
+## Облачная версия
+
+Версия для Cloudflare Workers + D1 находится в [`cloudflare/`](cloudflare/README.md). Она принимает сообщения через webhook и сохраняет анкеты в облачной базе. Для изменения облачного кода используйте `cloudflare/worker-core.mjs` и пересоберите `worker.mjs`.
+
 ## Возможности
 
 - Выбор услуги и пакета Basic, Standard, VIP или Premium.

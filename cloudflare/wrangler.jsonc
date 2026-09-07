@@ -1,0 +1,13 @@
+{
+  "name": "goshapa-order-bot",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-09-07",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "goshapa-orders",
+      "database_id": "af6a9fbf-b0e8-4acd-b7f5-bd712f8b16a6"
+    }
+  ]
+}

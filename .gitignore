@@ -12,3 +12,7 @@ bot_log.txt*
 !.env.example
 /ChatGPT Image *.png
 /*.docx
+.cloudflare-local/
+.dev.vars*
+.wrangler/
+node_modules/
